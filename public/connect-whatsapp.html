@@ -141,16 +141,46 @@
         FB.login(
           function (response) {
             const code = response?.authResponse?.code;
+            const accessToken = response?.authResponse?.accessToken;
 
-            if (!code) {
+            if (code) {
+              window.location.href =
+                REDIRECT_URI + "?code=" + encodeURIComponent(code);
+              return;
+            }
+
+            if (!accessToken) {
               button.disabled = false;
               status.textContent =
                 "تم إلغاء الربط أو لم تكتمل العملية. لم يتم تغيير أي شيء.";
               return;
             }
 
-            window.location.href =
-              REDIRECT_URI + "?code=" + encodeURIComponent(code);
+            status.textContent = "جارٍ حفظ ربط WhatsApp...";
+
+            fetch(REDIRECT_URI, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                accessToken: accessToken,
+              }),
+            })
+              .then(async function (result) {
+                const data = await result.json();
+
+                if (!result.ok || !data.ok) {
+                  throw new Error(data.error || "تعذر حفظ الربط");
+                }
+
+                window.location.href = data.redirectUrl;
+              })
+              .catch(function (error) {
+                console.error(error);
+                button.disabled = false;
+                status.textContent = "تعذر حفظ الربط. حاول مرة أخرى بعد قليل.";
+              });
           },
           {
             config_id: CONFIGURATION_ID,
