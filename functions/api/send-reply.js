@@ -1,10 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY,
-);
-
 function cleanPhone(phone) {
   return String(phone || "").replace(/\D/g, "");
 }
@@ -13,13 +8,11 @@ function getMetaError(data) {
   return data?.error?.message || "WhatsApp API error";
 }
 
-// يستخدم رقم Coexistence الجديد بعد ربطه.
-// وإذا لم يُربط بعد، يبقى الداشبورد قادرًا على استخدام الإعداد القديم.
-async function getWhatsAppConnection() {
+async function getWhatsAppConnection(supabase, env) {
   const { data, error } = await supabase
     .from("whatsapp_connections")
     .select("phone_number_id, access_token")
-    .eq("id", "abh")
+    .eq("id", "raidenceai")
     .maybeSingle();
 
   if (error) {
@@ -27,31 +20,39 @@ async function getWhatsAppConnection() {
   }
 
   return {
-    phoneNumberId: data?.phone_number_id || process.env.PHONE_NUMBER_ID,
-    accessToken: data?.access_token || process.env.WHATSAPP_TOKEN,
+    phoneNumberId: data?.phone_number_id || env.PHONE_NUMBER_ID,
+    accessToken: data?.access_token || env.WHATSAPP_TOKEN,
   };
 }
 
-export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res
-      .status(405)
-      .json({ success: false, error: "Method not allowed" });
-  }
-
+export async function onRequestPost(context) {
   try {
-    const phone = cleanPhone(req.body.to);
-    const message = String(req.body.message || "").trim();
+    const supabase = createClient(
+      context.env.SUPABASE_URL,
+      context.env.SUPABASE_SERVICE_ROLE_KEY,
+    );
+
+    const body = await context.request.json();
+    const phone = cleanPhone(body.to);
+    const message = String(body.message || "").trim();
 
     if (!phone || !message) {
-      return res.status(400).json({
-        success: false,
-        step: "validation",
-        error: "Missing phone or message",
-      });
+      return Response.json(
+        {
+          success: false,
+          step: "validation",
+          error: "Missing phone or message",
+        },
+        {
+          status: 400,
+        },
+      );
     }
 
-    const { phoneNumberId, accessToken } = await getWhatsAppConnection();
+    const { phoneNumberId, accessToken } = await getWhatsAppConnection(
+      supabase,
+      context.env,
+    );
 
     if (!phoneNumberId || !accessToken) {
       throw new Error("No active WhatsApp connection found");
@@ -69,7 +70,9 @@ export default async function handler(req, res) {
           messaging_product: "whatsapp",
           to: phone,
           type: "text",
-          text: { body: message },
+          text: {
+            body: message,
+          },
         }),
       },
     );
@@ -91,11 +94,16 @@ export default async function handler(req, res) {
         error_code: errorCode,
       });
 
-      return res.status(400).json({
-        success: false,
-        step: "send_text",
-        error: errorMessage,
-      });
+      return Response.json(
+        {
+          success: false,
+          step: "send_text",
+          error: errorMessage,
+        },
+        {
+          status: 400,
+        },
+      );
     }
 
     await supabase.from("messages").insert({
@@ -113,10 +121,12 @@ export default async function handler(req, res) {
         last_message: message,
         last_message_at: new Date().toISOString(),
       },
-      { onConflict: "phone" },
+      {
+        onConflict: "phone",
+      },
     );
 
-    return res.status(200).json({
+    return Response.json({
       success: true,
       message: "Message accepted by WhatsApp",
       data,
@@ -124,10 +134,15 @@ export default async function handler(req, res) {
   } catch (error) {
     console.error("SEND REPLY ERROR:", error);
 
-    return res.status(500).json({
-      success: false,
-      step: "server_error",
-      error: error.message,
-    });
+    return Response.json(
+      {
+        success: false,
+        step: "server_error",
+        error: error.message,
+      },
+      {
+        status: 500,
+      },
+    );
   }
 }

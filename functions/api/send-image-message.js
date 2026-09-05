@@ -1,18 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
 
-export const config = {
-  api: {
-    bodyParser: {
-      sizeLimit: "4mb",
-    },
-  },
-};
-
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY,
-);
-
 const MEDIA_BUCKET = "whatsapp-media";
 
 function cleanPhone(phone) {
@@ -23,13 +10,22 @@ function getMetaError(data) {
   return data?.error?.message || "WhatsApp rejected the media message";
 }
 
-// يستخدم بيانات Coexistence الجديدة بعد الربط.
-// ويبقي الإعداد القديم كـ fallback إلى أن يكتمل الربط.
-async function getWhatsAppConnection() {
+function base64ToUint8Array(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  return bytes;
+}
+
+async function getWhatsAppConnection(supabase, env) {
   const { data, error } = await supabase
     .from("whatsapp_connections")
     .select("phone_number_id, access_token")
-    .eq("id", "abh")
+    .eq("id", "raidenceai")
     .maybeSingle();
 
   if (error) {
@@ -37,8 +33,8 @@ async function getWhatsAppConnection() {
   }
 
   return {
-    phoneNumberId: data?.phone_number_id || process.env.PHONE_NUMBER_ID,
-    accessToken: data?.access_token || process.env.WHATSAPP_TOKEN,
+    phoneNumberId: data?.phone_number_id || env.PHONE_NUMBER_ID,
+    accessToken: data?.access_token || env.WHATSAPP_TOKEN,
   };
 }
 
@@ -62,21 +58,29 @@ function buildMetaPayload(type, mediaId, caption, fileName) {
   if (type === "image") {
     return {
       type: "image",
-      image: { id: mediaId, caption: caption || "" },
+      image: {
+        id: mediaId,
+        caption: caption || "",
+      },
     };
   }
 
   if (type === "video") {
     return {
       type: "video",
-      video: { id: mediaId, caption: caption || "" },
+      video: {
+        id: mediaId,
+        caption: caption || "",
+      },
     };
   }
 
   if (type === "audio") {
     return {
       type: "audio",
-      audio: { id: mediaId },
+      audio: {
+        id: mediaId,
+      },
     };
   }
 
@@ -99,30 +103,36 @@ function previewForType(type, caption) {
   return "📄 مستند";
 }
 
-export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res
-      .status(405)
-      .json({ success: false, error: "Method not allowed" });
-  }
-
+export async function onRequestPost(context) {
   try {
-    const { to, message, imageBase64, fileName, mimeType } = req.body;
+    const supabase = createClient(
+      context.env.SUPABASE_URL,
+      context.env.SUPABASE_SERVICE_ROLE_KEY,
+    );
+
+    const body = await context.request.json();
+    const { to, message, imageBase64, fileName, mimeType } = body;
+
     const phone = cleanPhone(to);
 
     if (!phone || !imageBase64 || !mimeType) {
-      return res.status(400).json({
-        success: false,
-        step: "validation",
-        error: "Missing phone, file, or file type",
-      });
+      return Response.json(
+        {
+          success: false,
+          step: "validation",
+          error: "Missing phone, file, or file type",
+        },
+        {
+          status: 400,
+        },
+      );
     }
 
-    const base64Data = imageBase64.includes(",")
+    const rawBase64 = imageBase64.includes(",")
       ? imageBase64.split(",")[1]
       : imageBase64;
 
-    const uploadBuffer = Buffer.from(base64Data, "base64");
+    const uploadDataBytes = base64ToUint8Array(rawBase64);
     const mediaType = getMediaType(mimeType);
     const extension = getExtension(mimeType, fileName || "");
 
@@ -137,7 +147,7 @@ export default async function handler(req, res) {
 
     const { error: storageError } = await supabase.storage
       .from(MEDIA_BUCKET)
-      .upload(storagePath, uploadBuffer, {
+      .upload(storagePath, uploadDataBytes, {
         contentType: mimeType,
         upsert: false,
       });
@@ -152,7 +162,10 @@ export default async function handler(req, res) {
       mediaUrl = publicUrlData?.publicUrl || null;
     }
 
-    const { phoneNumberId, accessToken } = await getWhatsAppConnection();
+    const { phoneNumberId, accessToken } = await getWhatsAppConnection(
+      supabase,
+      context.env,
+    );
 
     if (!phoneNumberId || !accessToken) {
       throw new Error("No active WhatsApp connection found");
@@ -162,7 +175,9 @@ export default async function handler(req, res) {
     formData.append("messaging_product", "whatsapp");
     formData.append(
       "file",
-      new Blob([uploadBuffer], { type: mimeType }),
+      new Blob([uploadDataBytes], {
+        type: mimeType,
+      }),
       safeFileName,
     );
 
@@ -177,11 +192,11 @@ export default async function handler(req, res) {
       },
     );
 
-    const uploadData = await uploadResponse.json();
+    const uploadResult = await uploadResponse.json();
 
     if (!uploadResponse.ok) {
-      const errorMessage = getMetaError(uploadData);
-      const errorCode = uploadData?.error?.code || null;
+      const errorMessage = getMetaError(uploadResult);
+      const errorCode = uploadResult?.error?.code || null;
 
       await supabase.from("messages").insert({
         wa_message_id: null,
@@ -194,11 +209,16 @@ export default async function handler(req, res) {
         error_code: errorCode,
       });
 
-      return res.status(400).json({
-        success: false,
-        step: "upload_media",
-        error: errorMessage,
-      });
+      return Response.json(
+        {
+          success: false,
+          step: "upload_media",
+          error: errorMessage,
+        },
+        {
+          status: 400,
+        },
+      );
     }
 
     const sendResponse = await fetch(
@@ -212,16 +232,21 @@ export default async function handler(req, res) {
         body: JSON.stringify({
           messaging_product: "whatsapp",
           to: phone,
-          ...buildMetaPayload(mediaType, uploadData.id, message, safeFileName),
+          ...buildMetaPayload(
+            mediaType,
+            uploadResult.id,
+            message,
+            safeFileName,
+          ),
         }),
       },
     );
 
-    const sendData = await sendResponse.json();
+    const sendResult = await sendResponse.json();
 
     if (!sendResponse.ok) {
-      const errorMessage = getMetaError(sendData);
-      const errorCode = sendData?.error?.code || null;
+      const errorMessage = getMetaError(sendResult);
+      const errorCode = sendResult?.error?.code || null;
 
       await supabase.from("messages").insert({
         wa_message_id: null,
@@ -234,15 +259,20 @@ export default async function handler(req, res) {
         error_code: errorCode,
       });
 
-      return res.status(400).json({
-        success: false,
-        step: "send_media",
-        error: errorMessage,
-      });
+      return Response.json(
+        {
+          success: false,
+          step: "send_media",
+          error: errorMessage,
+        },
+        {
+          status: 400,
+        },
+      );
     }
 
     await supabase.from("messages").insert({
-      wa_message_id: sendData.messages?.[0]?.id || null,
+      wa_message_id: sendResult.messages?.[0]?.id || null,
       phone,
       direction: "outgoing",
       message_type: mediaType,
@@ -257,22 +287,29 @@ export default async function handler(req, res) {
         last_message: previewForType(mediaType, message),
         last_message_at: new Date().toISOString(),
       },
-      { onConflict: "phone" },
+      {
+        onConflict: "phone",
+      },
     );
 
-    return res.status(200).json({
+    return Response.json({
       success: true,
       type: mediaType,
       media_url: mediaUrl,
-      data: sendData,
+      data: sendResult,
     });
   } catch (error) {
     console.error("SEND MEDIA ERROR:", error);
 
-    return res.status(500).json({
-      success: false,
-      step: "server_error",
-      error: error.message,
-    });
+    return Response.json(
+      {
+        success: false,
+        step: "server_error",
+        error: error.message,
+      },
+      {
+        status: 500,
+      },
+    );
   }
 }

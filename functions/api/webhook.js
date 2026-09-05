@@ -1,10 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY,
-);
-
 const MEDIA_BUCKET = "whatsapp-media";
 
 function getFriendlyStatusText(status, errorCode, errorMessage) {
@@ -16,6 +11,7 @@ function getFriendlyStatusText(status, errorCode, errorMessage) {
     if (errorCode === 131047) return "❌ العميل لم يتفاعل / لا يوجد opt-in";
     if (errorCode === 131049) return "❌ واتساب رفض الإرسال لحماية جودة الحساب";
     if (errorCode === 131026) return "❌ الرقم غير قابل للتسليم";
+
     return `❌ فشل الإرسال: ${errorMessage || "خطأ غير معروف"}`;
   }
 
@@ -25,7 +21,9 @@ function getFriendlyStatusText(status, errorCode, errorMessage) {
 function getExtension(mimeType, filename = "") {
   const fromName = filename.split(".").pop()?.toLowerCase();
 
-  if (filename.includes(".") && fromName) return fromName;
+  if (filename.includes(".") && fromName) {
+    return fromName;
+  }
 
   const extensions = {
     "image/jpeg": "jpg",
@@ -50,12 +48,11 @@ function getExtension(mimeType, filename = "") {
   );
 }
 
-// ينزّل الملف من Meta فور وصوله ويحفظ نسخة دائمة في Supabase Storage
-async function fetchAndStoreMedia(mediaId, originalFilename = "") {
+async function fetchAndStoreMedia(mediaId, originalFilename, supabase, env) {
   try {
     const metaRes = await fetch(`https://graph.facebook.com/v25.0/${mediaId}`, {
       headers: {
-        Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+        Authorization: `Bearer ${env.WHATSAPP_TOKEN}`,
       },
     });
 
@@ -68,7 +65,7 @@ async function fetchAndStoreMedia(mediaId, originalFilename = "") {
 
     const fileRes = await fetch(metaData.url, {
       headers: {
-        Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+        Authorization: `Bearer ${env.WHATSAPP_TOKEN}`,
       },
     });
 
@@ -77,8 +74,7 @@ async function fetchAndStoreMedia(mediaId, originalFilename = "") {
       return null;
     }
 
-    const arrayBuffer = await fileRes.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+    const fileData = await fileRes.arrayBuffer();
 
     const mimeType =
       metaData.mime_type ||
@@ -86,6 +82,7 @@ async function fetchAndStoreMedia(mediaId, originalFilename = "") {
       "application/octet-stream";
 
     const extension = getExtension(mimeType, originalFilename);
+
     const safeName = originalFilename
       ? originalFilename.replace(/[^\w.-]/g, "_")
       : `${mediaId}.${extension}`;
@@ -94,7 +91,7 @@ async function fetchAndStoreMedia(mediaId, originalFilename = "") {
 
     const { error: uploadError } = await supabase.storage
       .from(MEDIA_BUCKET)
-      .upload(storagePath, buffer, {
+      .upload(storagePath, fileData, {
         contentType: mimeType,
         upsert: false,
       });
@@ -108,16 +105,7 @@ async function fetchAndStoreMedia(mediaId, originalFilename = "") {
       .from(MEDIA_BUCKET)
       .getPublicUrl(storagePath);
 
-    const permanentUrl = publicUrlData?.publicUrl || null;
-
-    console.log("MEDIA SAVED:", {
-      mediaId,
-      mimeType,
-      storagePath,
-      permanentUrl,
-    });
-
-    return permanentUrl;
+    return publicUrlData?.publicUrl || null;
   } catch (error) {
     console.error("MEDIA STORE ERROR:", error);
     return null;
@@ -146,41 +134,73 @@ function getMessageText(message) {
 }
 
 function getPreviewText(message) {
-  if (message.type === "image") return message.image?.caption || "📷 صورة";
-  if (message.type === "audio") return "🎤 رسالة صوتية";
-  if (message.type === "video") return message.video?.caption || "🎥 فيديو";
-  if (message.type === "document")
+  if (message.type === "image") {
+    return message.image?.caption || "📷 صورة";
+  }
+
+  if (message.type === "audio") {
+    return "🎤 رسالة صوتية";
+  }
+
+  if (message.type === "video") {
+    return message.video?.caption || "🎥 فيديو";
+  }
+
+  if (message.type === "document") {
     return message.document?.caption || "📄 مستند";
-  if (message.type === "sticker") return "🏷️ ملصق";
+  }
+
+  if (message.type === "sticker") {
+    return "🏷️ ملصق";
+  }
 
   return getMessageText(message);
 }
 
-export default async function handler(req, res) {
-  if (req.method === "GET") {
-    const mode = req.query["hub.mode"];
-    const token = req.query["hub.verify_token"];
-    const challenge = req.query["hub.challenge"];
+export async function onRequest(context) {
+  const { request, env } = context;
+  const url = new URL(request.url);
 
-    if (mode === "subscribe" && token === process.env.VERIFY_TOKEN) {
-      return res.status(200).send(challenge);
+  if (request.method === "GET") {
+    const mode = url.searchParams.get("hub.mode");
+    const token = url.searchParams.get("hub.verify_token");
+    const challenge = url.searchParams.get("hub.challenge");
+
+    if (mode === "subscribe" && token === env.VERIFY_TOKEN) {
+      return new Response(challenge || "", {
+        status: 200,
+      });
     }
 
-    return res.status(403).send("Forbidden");
+    return new Response("Forbidden", {
+      status: 403,
+    });
   }
 
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
+  if (request.method !== "POST") {
+    return Response.json(
+      {
+        error: "Method not allowed",
+      },
+      {
+        status: 405,
+      },
+    );
   }
 
   try {
-    const entries = req.body?.entry || [];
+    const supabase = createClient(
+      env.SUPABASE_URL,
+      env.SUPABASE_SERVICE_ROLE_KEY,
+    );
+
+    const payload = await request.json();
+    const entries = payload?.entry || [];
 
     for (const entry of entries) {
       for (const change of entry.changes || []) {
         const value = change.value || {};
 
-        // حالات الرسائل المرسلة
         for (const statusItem of value.statuses || []) {
           const waMessageId = statusItem.id;
           const phone = statusItem.recipient_id;
@@ -208,12 +228,13 @@ export default async function handler(req, res) {
                 ),
                 last_message_at: new Date().toISOString(),
               },
-              { onConflict: "phone" },
+              {
+                onConflict: "phone",
+              },
             );
           }
         }
 
-        // رسائل العميل الواردة: نصوص، صور، مستندات، صوت، فيديو، ستيكر
         for (const message of value.messages || []) {
           const phone = message.from;
           const mediaObj = getMediaObject(message);
@@ -224,6 +245,8 @@ export default async function handler(req, res) {
             mediaUrl = await fetchAndStoreMedia(
               mediaObj.id,
               mediaObj.filename || "",
+              supabase,
+              env,
             );
           }
 
@@ -239,7 +262,6 @@ export default async function handler(req, res) {
               status: "received",
             });
 
-          // WhatsApp قد يعيد إرسال نفس الـ webhook؛ لا نعتبر تكرار الرسالة خطأً خطيرًا
           if (insertError && insertError.code !== "23505") {
             console.error("MESSAGE INSERT ERROR:", insertError);
           }
@@ -250,7 +272,9 @@ export default async function handler(req, res) {
               last_message: getPreviewText(message),
               last_message_at: new Date().toISOString(),
             },
-            { onConflict: "phone" },
+            {
+              onConflict: "phone",
+            },
           );
 
           console.log("INCOMING MESSAGE SAVED:", {
@@ -263,13 +287,20 @@ export default async function handler(req, res) {
       }
     }
 
-    return res.status(200).json({ success: true });
+    return Response.json({
+      success: true,
+    });
   } catch (error) {
     console.error("WEBHOOK ERROR:", error);
 
-    return res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+    return Response.json(
+      {
+        success: false,
+        error: error.message,
+      },
+      {
+        status: 500,
+      },
+    );
   }
 }

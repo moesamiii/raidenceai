@@ -1,25 +1,31 @@
 import { createClient } from "@supabase/supabase-js";
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY,
-);
+const REDIRECT_URI = "https://raidenceai.pages.dev/api/coexistence-callback";
 
-const REDIRECT_URI = "https://abhauto.vercel.app/api/coexistence-callback";
+export async function onRequestGet(context) {
+  const { env, request } = context;
+  const url = new URL(request.url);
 
-export default async function handler(req, res) {
-  const { code, error, error_reason, error_description } = req.query;
+  const code = url.searchParams.get("code");
+  const error = url.searchParams.get("error");
+  const errorReason = url.searchParams.get("error_reason");
+  const errorDescription = url.searchParams.get("error_description");
 
   if (error) {
-    return res
-      .status(400)
-      .send(
-        `WhatsApp connection cancelled: ${error_reason || error_description}`,
-      );
+    return new Response(
+      `WhatsApp connection cancelled: ${
+        errorReason || errorDescription || error
+      }`,
+      {
+        status: 400,
+      },
+    );
   }
 
   if (!code) {
-    return res.status(400).send("Missing authorization code");
+    return new Response("Missing authorization code", {
+      status: 400,
+    });
   }
 
   try {
@@ -27,8 +33,8 @@ export default async function handler(req, res) {
       "https://graph.facebook.com/v25.0/oauth/access_token",
     );
 
-    tokenUrl.searchParams.set("client_id", process.env.META_APP_ID);
-    tokenUrl.searchParams.set("client_secret", process.env.META_APP_SECRET);
+    tokenUrl.searchParams.set("client_id", env.META_APP_ID);
+    tokenUrl.searchParams.set("client_secret", env.META_APP_SECRET);
     tokenUrl.searchParams.set("redirect_uri", REDIRECT_URI);
     tokenUrl.searchParams.set("code", code);
 
@@ -42,9 +48,11 @@ export default async function handler(req, res) {
     const accessToken = tokenData.access_token;
 
     const wabaResponse = await fetch(
-      `https://graph.facebook.com/v25.0/${process.env.META_BUSINESS_ID}/owned_whatsapp_business_accounts`,
+      `https://graph.facebook.com/v25.0/${env.META_BUSINESS_ID}/owned_whatsapp_business_accounts`,
       {
-        headers: { Authorization: `Bearer ${accessToken}` },
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
       },
     );
 
@@ -58,7 +66,9 @@ export default async function handler(req, res) {
     const phonesResponse = await fetch(
       `https://graph.facebook.com/v25.0/${wabaId}/phone_numbers`,
       {
-        headers: { Authorization: `Bearer ${accessToken}` },
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
       },
     );
 
@@ -69,26 +79,40 @@ export default async function handler(req, res) {
       throw new Error("Could not find Phone Number ID");
     }
 
+    const supabase = createClient(
+      env.SUPABASE_URL,
+      env.SUPABASE_SERVICE_ROLE_KEY,
+    );
+
     const { error: saveError } = await supabase
       .from("whatsapp_connections")
       .upsert(
         {
-          id: "abh",
+          id: "raidenceai",
           access_token: accessToken,
           waba_id: wabaId,
           phone_number_id: phoneNumber.id,
           display_phone_number: phoneNumber.display_phone_number || null,
           updated_at: new Date().toISOString(),
         },
-        { onConflict: "id" },
+        {
+          onConflict: "id",
+        },
       );
 
-    if (saveError) throw saveError;
+    if (saveError) {
+      throw saveError;
+    }
 
-    return res.redirect("/chat.html?coexistence=connected");
+    return Response.redirect(
+      "https://raidenceai.pages.dev/chat.html?coexistence=connected",
+      302,
+    );
   } catch (error) {
     console.error("COEXISTENCE CALLBACK ERROR:", error);
 
-    return res.status(500).send(`Connection failed: ${error.message}`);
+    return new Response(`Connection failed: ${error.message}`, {
+      status: 500,
+    });
   }
 }
