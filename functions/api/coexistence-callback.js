@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 
-const REDIRECT_URI = "https://raidenceai.pages.dev/api/coexistence-callback";
+const REDIRECT_URI = "https://raidenceai.pages.dev/connect-whatsapp.html";
 
 const SUCCESS_URL =
   "https://raidenceai.pages.dev/chat.html?coexistence=connected";
