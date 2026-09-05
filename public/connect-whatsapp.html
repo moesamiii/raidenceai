@@ -75,11 +75,11 @@
         أيضًا مع الداشبورد.
       </p>
 
-      <button id="connectButton" type="button">
+      <button id="connectButton" type="button" disabled>
         ربط واتساب الأعمال عبر Coexistence
       </button>
 
-      <div id="status"></div>
+      <div id="status">جارٍ تجهيز نافذة الربط...</div>
     </main>
 
     <script>
@@ -91,6 +91,11 @@
       const button = document.getElementById("connectButton");
       const status = document.getElementById("status");
 
+      function enableConnection() {
+        button.disabled = false;
+        status.textContent = "";
+      }
+
       window.fbAsyncInit = function () {
         FB.init({
           appId: META_APP_ID,
@@ -99,25 +104,34 @@
           version: "v25.0",
         });
 
-        button.disabled = false;
-        status.textContent = "";
+        enableConnection();
       };
 
       (function loadFacebookSdk() {
         const script = document.createElement("script");
+
         script.async = true;
-        script.defer = true;
-        script.crossOrigin = "anonymous";
         script.src = "https://connect.facebook.net/en_US/sdk.js";
+
+        script.onerror = function () {
+          status.textContent =
+            "تعذر تحميل Meta. تأكد من الإنترنت ثم أعد تحميل الصفحة.";
+        };
+
         document.head.appendChild(script);
       })();
 
-      button.disabled = true;
-      status.textContent = "جارٍ تجهيز نافذة الربط...";
+      setTimeout(function () {
+        if (!window.FB) {
+          status.textContent =
+            "ما زال تحميل Meta جاريًا. إذا استمر أكثر من دقيقة، أعد تحميل الصفحة.";
+        }
+      }, 10000);
 
       button.addEventListener("click", function () {
         if (!window.FB) {
-          status.textContent = "لم يتم تحميل Meta بعد، أعد المحاولة بعد ثوانٍ.";
+          status.textContent =
+            "لم يتم تحميل Meta بعد. أعد تحميل الصفحة ثم حاول مجددًا.";
           return;
         }
 
@@ -142,6 +156,9 @@
             config_id: CONFIGURATION_ID,
             response_type: "code",
             override_default_response_type: true,
+            extras: {
+              featureType: "whatsapp_business_app_onboarding",
+            },
           },
         );
       });
