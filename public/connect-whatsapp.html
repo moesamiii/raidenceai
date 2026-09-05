@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ربط واتساب الأعمال</title>
+
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Arial, sans-serif;
+      }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        display: grid;
+        place-items: center;
+        background: #090909;
+        color: #f5f5f5;
+      }
+
+      main {
+        width: min(520px, calc(100% - 40px));
+        padding: 40px;
+        border: 1px solid #2a2a2a;
+        border-radius: 20px;
+        background: #121212;
+        text-align: center;
+      }
+
+      h1 {
+        margin: 0 0 16px;
+        font-size: 28px;
+      }
+
+      p {
+        color: #b6b6b6;
+        line-height: 1.8;
+      }
+
+      button {
+        width: 100%;
+        margin-top: 20px;
+        padding: 16px;
+        border: 0;
+        border-radius: 12px;
+        background: #25d366;
+        color: #08120b;
+        font-size: 17px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        opacity: 0.55;
+        cursor: wait;
+      }
+
+      #status {
+        min-height: 24px;
+        margin-top: 18px;
+        color: #b6b6b6;
+        font-size: 14px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <main>
+      <h1>ربط WhatsApp Business</h1>
+
+      <p>
+        سيبقى رقم العيادة يعمل على تطبيق WhatsApp Business في الجوال، وسيُربط
+        أيضًا مع الداشبورد.
+      </p>
+
+      <button id="connectButton" type="button">
+        ربط واتساب الأعمال عبر Coexistence
+      </button>
+
+      <div id="status"></div>
+    </main>
+
+    <script>
+      const META_APP_ID = "3261290637390413";
+      const CONFIGURATION_ID = "2258617468257121";
+      const REDIRECT_URI =
+        "https://raidenceai.pages.dev/api/coexistence-callback";
+
+      const button = document.getElementById("connectButton");
+      const status = document.getElementById("status");
+
+      window.fbAsyncInit = function () {
+        FB.init({
+          appId: META_APP_ID,
+          cookie: true,
+          xfbml: false,
+          version: "v25.0",
+        });
+
+        button.disabled = false;
+        status.textContent = "";
+      };
+
+      (function loadFacebookSdk() {
+        const script = document.createElement("script");
+        script.async = true;
+        script.defer = true;
+        script.crossOrigin = "anonymous";
+        script.src = "https://connect.facebook.net/en_US/sdk.js";
+        document.head.appendChild(script);
+      })();
+
+      button.disabled = true;
+      status.textContent = "جارٍ تجهيز نافذة الربط...";
+
+      button.addEventListener("click", function () {
+        if (!window.FB) {
+          status.textContent = "لم يتم تحميل Meta بعد، أعد المحاولة بعد ثوانٍ.";
+          return;
+        }
+
+        button.disabled = true;
+        status.textContent = "جارٍ فتح نافذة ربط WhatsApp...";
+
+        FB.login(
+          function (response) {
+            const code = response?.authResponse?.code;
+
+            if (!code) {
+              button.disabled = false;
+              status.textContent =
+                "تم إلغاء الربط أو لم تكتمل العملية. لم يتم تغيير أي شيء.";
+              return;
+            }
+
+            window.location.href =
+              REDIRECT_URI + "?code=" + encodeURIComponent(code);
+          },
+          {
+            config_id: CONFIGURATION_ID,
+            response_type: "code",
+            override_default_response_type: true,
+          },
+        );
+      });
+    </script>
+  </body>
+</html>
